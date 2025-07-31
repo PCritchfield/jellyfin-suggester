@@ -1,0 +1,14 @@
+---
+name: "Jellyfin.Plugin.Suggester"
+guid: "eb5d7894-8eef-4b36-9c1d-9d5c0b5c8e4a"
+version: "1.0.0.0"
+targetAbi: "10.9.0.0"
+framework: "net8.0"
+owner: "PCritchfield"
+overview: "Movie recommendation plugin using OpenAI"
+description: "Integrates with OpenAI to provide intelligent movie recommendations based on your Jellyfin library"
+category: "General"
+artifacts:
+  - "Jellyfin.Plugin.Suggester.dll"
+changelog: >
+  Initial release with basic recommendation functionality

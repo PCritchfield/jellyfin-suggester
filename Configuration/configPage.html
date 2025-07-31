@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Movie Suggester</title>
+</head>
+<body>
+    <div id="MovieSuggesterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="MovieSuggesterConfigForm">
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h2 class="sectionTitle">Movie Suggester Configuration</h2>
+                    </div>
+                    
+                    <div class="verticalSection">
+                        <div class="sectionTitleContainer">
+                            <h3 class="sectionTitle">OpenAI Settings</h3>
+                        </div>
+                        
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="txtOpenAiApiKey">OpenAI API Key:</label>
+                            <input is="emby-input" type="password" id="txtOpenAiApiKey" name="OpenAiApiKey" />
+                            <div class="fieldDescription">
+                                Your OpenAI API key. Get one from <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a>.
+                            </div>
+                        </div>
+                        
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="selectOpenAiModel">OpenAI Model:</label>
+                            <select is="emby-select" id="selectOpenAiModel" name="OpenAiModel">
+                                <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Recommended)</option>
+                                <option value="gpt-4">GPT-4</option>
+                                <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                            </select>
+                            <div class="fieldDescription">
+                                Choose the OpenAI model for generating recommendations. GPT-3.5 Turbo is cost-effective for most use cases.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="verticalSection">
+                        <div class="sectionTitleContainer">
+                            <h3 class="sectionTitle">Recommendation Settings</h3>
+                        </div>
+                        
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="txtMaxRecommendations">Maximum Recommendations:</label>
+                            <input is="emby-input" type="number" id="txtMaxRecommendations" name="MaxRecommendations" min="1" max="20" />
+                            <div class="fieldDescription">
+                                Number of movie recommendations to generate (1-20).
+                            </div>
+                        </div>
+                        
+                        <div class="checkboxContainer">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="chkIncludeDescriptions" name="IncludeDescriptions" />
+                                <span>Include movie descriptions in recommendations</span>
+                            </label>
+                            <div class="fieldDescription">
+                                When enabled, recommendations will include brief descriptions explaining why each movie was suggested.
+                            </div>
+                        </div>
+                        
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="txtPromptTemplate">Custom Prompt Template:</label>
+                            <textarea is="emby-input" id="txtPromptTemplate" name="PromptTemplate" rows="4"></textarea>
+                            <div class="fieldDescription">
+                                Customize how the AI generates recommendations. Use {movies} for the library list and {count} for the number of recommendations.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = "eb5d7894-8eef-4b36-9c1d-9d5c0b5c8e4a";
+
+            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                document.querySelector('#txtOpenAiApiKey').value = config.OpenAiApiKey || '';
+                document.querySelector('#selectOpenAiModel').value = config.OpenAiModel || 'gpt-3.5-turbo';
+                document.querySelector('#txtMaxRecommendations').value = config.MaxRecommendations || 5;
+                document.querySelector('#chkIncludeDescriptions').checked = config.IncludeDescriptions !== false;
+                document.querySelector('#txtPromptTemplate').value = config.PromptTemplate || '';
+            });
+
+            document.querySelector('#MovieSuggesterConfigForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                
+                Dashboard.showLoadingMsg();
+
+                var config = {
+                    OpenAiApiKey: document.querySelector('#txtOpenAiApiKey').value,
+                    OpenAiModel: document.querySelector('#selectOpenAiModel').value,
+                    MaxRecommendations: parseInt(document.querySelector('#txtMaxRecommendations').value) || 5,
+                    IncludeDescriptions: document.querySelector('#chkIncludeDescriptions').checked,
+                    PromptTemplate: document.querySelector('#txtPromptTemplate').value
+                };
+
+                ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
+                    Dashboard.processPluginConfigurationUpdateResult();
+                });
+            });
+        })();
+    </script>
+</body>
+</html>
