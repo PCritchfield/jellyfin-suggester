@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Movie Suggester</title>
+    <style>
+        .pluginConfigurationPage {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .suggester-app {
+            margin-top: 20px;
+        }
+
+        .input-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .input-section h3 {
+            margin-top: 0;
+            color: #333;
+        }
+
+        #txtUserPrompt {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
+        }
+
+        #btnSuggest {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        #btnSuggest:hover {
+            background-color: #0056b3;
+        }
+
+        #btnSuggest:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .error-message {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border: 1px solid #f5c6cb;
+        }
+
+        .suggestions-container {
+            margin-top: 20px;
+        }
+
+        .mini-card {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .mini-card h3 {
+            margin: 0 0 8px 0;
+            color: #333;
+            font-size: 18px;
+        }
+
+        .mini-card .desc {
+            color: #666;
+            margin: 8px 0 0 0;
+            font-style: italic;
+        }
+
+        .meta-info {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .examples {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .examples strong {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="pluginConfigurationPage">
+        <h2>🎬 Movie Suggester</h2>
+        <p>Get personalized movie recommendations from your Jellyfin library using AI.</p>
+        
+        <div class="suggester-app">
+            <div class="input-section">
+                <h3>What are you in the mood for?</h3>
+                <input type="text" id="txtUserPrompt" 
+                       placeholder="I'm in the mood for buddy-cop action movies..." 
+                       maxlength="500">
+                <br>
+                <button id="btnSuggest">Get Suggestions</button>
+                
+                <div class="examples">
+                    <strong>Try these examples:</strong><br>
+                    • "Something funny and light-hearted"<br>
+                    • "A thriller that will keep me on the edge of my seat"<br>
+                    • "Classic sci-fi from the 80s"<br>
+                    • "Feel-good romantic comedies"
+                </div>
+            </div>
+
+            <div class="loading" id="loadingIndicator">
+                <p>🤖 Analyzing your library and generating recommendations...</p>
+            </div>
+
+            <div id="errorContainer"></div>
+            
+            <div class="suggestions-container" id="suggestionsContainer"></div>
+            
+            <div class="meta-info" id="metaInfo" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        document.addEventListener('DOMContentLoaded', function() {
+            const promptInput = document.getElementById('txtUserPrompt');
+            const suggestButton = document.getElementById('btnSuggest');
+            const loadingIndicator = document.getElementById('loadingIndicator');
+            const errorContainer = document.getElementById('errorContainer');
+            const suggestionsContainer = document.getElementById('suggestionsContainer');
+            const metaInfo = document.getElementById('metaInfo');
+
+            // Handle suggestion generation
+            suggestButton.addEventListener('click', async function() {
+                const prompt = promptInput.value.trim();
+                if (!prompt) {
+                    showError('Please enter what you\'re in the mood for.');
+                    return;
+                }
+
+                await generateSuggestions(prompt);
+            });
+
+            // Handle Enter key in input
+            promptInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    suggestButton.click();
+                }
+            });
+
+            async function generateSuggestions(prompt) {
+                try {
+                    // Show loading state
+                    setLoadingState(true);
+                    clearResults();
+
+                    // Prepare request
+                    const requestBody = {
+                        UserId: "00000000-0000-0000-0000-000000000000", // Will be extracted from auth context
+                        Prompt: prompt,
+                        MaxLibraryMovies: 20,
+                        ForceRegenerate: true
+                    };
+
+                    // Make API call
+                    const response = await fetch('/Suggester/Generate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Emby-Authorization': getAuthHeader()
+                        },
+                        body: JSON.stringify(requestBody)
+                    });
+
+                    const data = await response.json();
+
+                    if (data.Success && data.Recommendations && data.Recommendations.length > 0) {
+                        displayRecommendations(data.Recommendations, data);
+                    } else {
+                        // Try to get cached recommendations as fallback
+                        await getCachedRecommendations(data.ErrorMessage);
+                    }
+
+                } catch (error) {
+                    console.error('Error generating suggestions:', error);
+                    // Try cached recommendations as fallback
+                    await getCachedRecommendations('Network error occurred. Showing cached recommendations if available.');
+                } finally {
+                    setLoadingState(false);
+                }
+            }
+
+            async function getCachedRecommendations(primaryError) {
+                try {
+                    const response = await fetch('/Suggester/Cached', {
+                        headers: {
+                            'X-Emby-Authorization': getAuthHeader()
+                        }
+                    });
+
+                    const data = await response.json();
+
+                    if (data.Success && data.Recommendations && data.Recommendations.length > 0) {
+                        displayRecommendations(data.Recommendations, data, true);
+                        showError('Using cached recommendations: ' + primaryError);
+                    } else {
+                        showError(primaryError || 'No recommendations available. Please try again later.');
+                    }
+                } catch (error) {
+                    console.error('Error getting cached suggestions:', error);
+                    showError(primaryError || 'Unable to get recommendations. Please try again later.');
+                }
+            }
+
+            function displayRecommendations(recommendations, responseData, isCached = false) {
+                suggestionsContainer.innerHTML = '';
+
+                recommendations.forEach(rec => {
+                    const card = document.createElement('div');
+                    card.className = 'mini-card';
+                    
+                    const title = rec.Title || 'Unknown Title';
+                    const year = rec.Year ? ` (${rec.Year})` : '';
+                    const description = rec.Description || '';
+
+                    card.innerHTML = `
+                        <h3>${escapeHtml(title)}${year}</h3>
+                        ${description ? `<p class="desc">"${escapeHtml(description)}"</p>` : ''}
+                    `;
+
+                    suggestionsContainer.appendChild(card);
+                });
+
+                // Show metadata
+                const cachedText = isCached ? ' (cached)' : '';
+                const generatedAt = responseData.GeneratedAt ? new Date(responseData.GeneratedAt).toLocaleString() : 'Unknown';
+                const basedOn = responseData.BasedOnMovieCount || 'Unknown';
+
+                metaInfo.innerHTML = `
+                    <strong>Results${cachedText}:</strong> ${recommendations.length} recommendations based on ${basedOn} movies from your library.<br>
+                    <strong>Generated:</strong> ${generatedAt}
+                `;
+                metaInfo.style.display = 'block';
+            }
+
+            function setLoadingState(isLoading) {
+                suggestButton.disabled = isLoading;
+                loadingIndicator.style.display = isLoading ? 'block' : 'none';
+                
+                if (isLoading) {
+                    suggestButton.textContent = 'Generating...';
+                } else {
+                    suggestButton.textContent = 'Get Suggestions';
+                }
+            }
+
+            function clearResults() {
+                errorContainer.innerHTML = '';
+                suggestionsContainer.innerHTML = '';
+                metaInfo.style.display = 'none';
+            }
+
+            function showError(message) {
+                errorContainer.innerHTML = `<div class="error-message">${escapeHtml(message)}</div>`;
+            }
+
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            function getAuthHeader() {
+                // Get Jellyfin auth token from local storage or session
+                // This is a simplified version - actual implementation may vary
+                const token = localStorage.getItem('jellyfin-credentials') || 
+                             sessionStorage.getItem('jellyfin-credentials');
+                
+                if (token) {
+                    try {
+                        const credentials = JSON.parse(token);
+                        return `MediaBrowser Client="${credentials.Client || 'Jellyfin Web'}", Device="${credentials.Device || 'Web Browser'}", DeviceId="${credentials.DeviceId}", Version="${credentials.Version || '1.0'}", Token="${credentials.AccessToken}"`;
+                    } catch (e) {
+                        console.warn('Failed to parse Jellyfin credentials');
+                    }
+                }
+                
+                // Fallback - let Jellyfin handle auth through cookies/session
+                return '';
+            }
+        });
+    </script>
+</body>
+</html>

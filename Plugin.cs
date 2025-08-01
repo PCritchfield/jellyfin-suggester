@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Jellyfin.Plugin.Suggester.Configuration;
+using Jellyfin.Plugin.Suggester.Services;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Jellyfin.Plugin.Suggester;
 
@@ -42,11 +44,20 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
         return new[]
         {
+            // Admin configuration page
             new PluginPageInfo
             {
-                Name = this.Name,
+                Name = "Configuration",
                 EmbeddedResourcePath = string.Format(CultureInfo.InvariantCulture, "{0}.Configuration.configPage.html", GetType().Namespace)
+            },
+            // User suggester page
+            new PluginPageInfo
+            {
+                Name = "Movie Suggester",
+                EmbeddedResourcePath = string.Format(CultureInfo.InvariantCulture, "{0}.Configuration.suggesterPage.html", GetType().Namespace)
             }
         };
     }
+
+
 }

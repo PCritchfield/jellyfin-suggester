@@ -2,10 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Suggester.Services;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Suggester.Api;
@@ -13,9 +16,11 @@ namespace Jellyfin.Plugin.Suggester.Api;
 /// <summary>
 /// API controller for movie recommendation endpoints.
 /// Provides methods for generating and retrieving movie suggestions.
-/// TODO: Implement proper Jellyfin API endpoint registration
 /// </summary>
-public class SuggesterController
+[ApiController]
+[Route("Suggester")]
+[Authorize]
+public class SuggesterController : ControllerBase
 {
     private readonly JellyfinLibraryService _libraryService;
     private readonly OpenAiRecommendationService _recommendationService;
@@ -49,17 +54,44 @@ public class SuggesterController
     /// </summary>
     /// <param name="request">The recommendation request.</param>
     /// <returns>A list of movie recommendations.</returns>
-    public async Task<RecommendationResponse> Post(GenerateRecommendationsRequest request)
+    [HttpPost("Generate")]
+    public async Task<ActionResult<RecommendationResponse>> Post([FromBody] GenerateRecommendationsRequest request)
     {
         try
         {
-            _logger.LogInformation("Generating recommendations for user {UserId}", request.UserId);
-
-            // Validate request
-            if (request.UserId == Guid.Empty)
+            // Extract user ID from claims if not provided in request
+            var userId = request.UserId;
+            if (userId == Guid.Empty)
             {
-                throw new ArgumentException("Valid UserId is required", nameof(request.UserId));
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (Guid.TryParse(userIdClaim, out var parsedUserId))
+                {
+                    userId = parsedUserId;
+                }
+                else
+                {
+                    return BadRequest(new RecommendationResponse
+                    {
+                        Success = false,
+                        ErrorMessage = "Unable to determine user ID from authentication context"
+                    });
+                }
             }
+
+            _logger.LogInformation("Generating recommendations for user {UserId} with prompt: {Prompt}", userId, request.Prompt);
+
+            // Validate prompt
+            if (string.IsNullOrWhiteSpace(request.Prompt))
+            {
+                return BadRequest(new RecommendationResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Prompt is required. Please describe what you're in the mood for."
+                });
+            }
+
+            // Update request with resolved user ID
+            request.UserId = userId;
 
             // Get plugin configuration
             var config = Plugin.Instance?.Configuration;
@@ -70,11 +102,11 @@ public class SuggesterController
 
             if (string.IsNullOrEmpty(config.OpenAiApiKey))
             {
-                return new RecommendationResponse
+                return BadRequest(new RecommendationResponse
                 {
                     Success = false,
                     ErrorMessage = "OpenAI API key is not configured. Please configure the plugin settings."
-                };
+                });
             }
 
             // Get user's movie library
@@ -84,37 +116,38 @@ public class SuggesterController
 
             if (!userMovies.Any())
             {
-                return new RecommendationResponse
+                return NotFound(new RecommendationResponse
                 {
                     Success = false,
                     ErrorMessage = "No movies found in user's library"
-                };
+                });
             }
 
-            // Generate recommendations using OpenAI
+            // Generate recommendations using OpenAI with user's prompt
             var recommendations = await _recommendationService.GenerateRecommendationsAsync(
-                userMovies, config);
+                userMovies, config, request.Prompt);
 
             _logger.LogInformation("Successfully generated {Count} recommendations for user {UserId}", 
-                recommendations.Count, request.UserId);
+                recommendations.Count, userId);
 
-            return new RecommendationResponse
+            return Ok(new RecommendationResponse
             {
                 Success = true,
                 Recommendations = recommendations,
                 GeneratedAt = DateTime.UtcNow,
                 BasedOnMovieCount = userMovies.Count
-            };
+            });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error generating recommendations for user {UserId}", request.UserId);
             
-            return new RecommendationResponse
+            // TODO: Implement fallback to cached recommendations on API failure
+            return StatusCode(500, new RecommendationResponse
             {
                 Success = false,
                 ErrorMessage = $"Failed to generate recommendations: {ex.Message}"
-            };
+            });
         }
     }
 
@@ -123,21 +156,41 @@ public class SuggesterController
     /// </summary>
     /// <param name="request">The get recommendations request.</param>
     /// <returns>Cached recommendations or empty response.</returns>
-    public async Task<RecommendationResponse> Get(GetRecommendationsRequest request)
+    [HttpGet("Cached")]
+    public async Task<ActionResult<RecommendationResponse>> Get([FromQuery] GetRecommendationsRequest request)
     {
+        // Extract user ID from claims if not provided in request
+        var userId = request.UserId;
+        if (userId == Guid.Empty)
+        {
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (Guid.TryParse(userIdClaim, out var parsedUserId))
+            {
+                userId = parsedUserId;
+            }
+            else
+            {
+                return BadRequest(new RecommendationResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Unable to determine user ID from authentication context"
+                });
+            }
+        }
+
         // TODO: Implement caching mechanism for recommendations
         // TODO: Store recommendations in Jellyfin database or external cache
         // TODO: Add expiration logic for cached recommendations
         
-        _logger.LogInformation("Getting cached recommendations for user {UserId}", request.UserId);
+        _logger.LogInformation("Getting cached recommendations for user {UserId}", userId);
         
         // For now, return empty response indicating no cached recommendations
-        return new RecommendationResponse
+        return Ok(new RecommendationResponse
         {
             Success = true,
             Recommendations = new List<MovieRecommendation>(),
             ErrorMessage = "No cached recommendations available. Use POST to generate new recommendations."
-        };
+        });
     }
 }
 
@@ -149,8 +202,13 @@ public class GenerateRecommendationsRequest
     /// <summary>
     /// Gets or sets the user ID to generate recommendations for.
     /// </summary>
-    [Required]
     public Guid UserId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the user's natural language prompt describing what they want to watch.
+    /// </summary>
+    [Required]
+    public string Prompt { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the maximum number of movies to analyze from user's library.

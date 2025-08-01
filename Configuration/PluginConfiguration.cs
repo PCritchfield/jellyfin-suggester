@@ -35,9 +35,11 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>
     /// Gets or sets the recommendation prompt template.
     /// Used to customize how the AI generates recommendations.
+    /// Supports placeholders: {movies}, {prompt}, {count}
     /// </summary>
     public string PromptTemplate { get; set; } = 
-        "Based on the following movies in the user's library: {movies}, " +
-        "recommend {count} similar movies that the user might enjoy. " +
-        "Focus on genre, themes, and quality. Provide brief explanations for each recommendation.";
+        "You are a movie sommelier with expertise in film recommendations. " +
+        "Based on this catalog from the user's library: {movies}. " +
+        "When a user says '{prompt}', recommend {count} films from their library that best match their request. " +
+        "Focus on matching their mood, genre preferences, and specific criteria mentioned.";
 }

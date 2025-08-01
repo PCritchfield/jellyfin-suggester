@@ -32,14 +32,16 @@ public class OpenAiRecommendationService
     }
 
     /// <summary>
-    /// Generates movie recommendations based on a user's library.
+    /// Generates movie recommendations based on a user's library and prompt.
     /// </summary>
     /// <param name="userMovies">List of movies in the user's library.</param>
     /// <param name="config">Plugin configuration with OpenAI settings.</param>
+    /// <param name="userPrompt">User's natural language prompt describing what they want to watch.</param>
     /// <returns>A list of movie recommendations.</returns>
     public async Task<List<MovieRecommendation>> GenerateRecommendationsAsync(
         List<MovieInfo> userMovies, 
-        PluginConfiguration config)
+        PluginConfiguration config,
+        string userPrompt)
     {
         try
         {
@@ -57,7 +59,7 @@ public class OpenAiRecommendationService
             _logger.LogInformation("Generating recommendations for {MovieCount} movies using model {Model}", 
                 userMovies.Count, config.OpenAiModel);
 
-            var prompt = BuildPrompt(userMovies, config);
+            var prompt = BuildPrompt(userMovies, config, userPrompt);
             var response = await CallOpenAiApiAsync(prompt, config);
             var recommendations = ParseRecommendations(response, config.IncludeDescriptions);
 
@@ -72,24 +74,27 @@ public class OpenAiRecommendationService
     }
 
     /// <summary>
-    /// Builds the prompt for OpenAI based on user's movie library and configuration.
+    /// Builds the prompt for OpenAI based on user's movie library, configuration, and user prompt.
     /// </summary>
     /// <param name="userMovies">User's movie collection.</param>
     /// <param name="config">Plugin configuration.</param>
+    /// <param name="userPrompt">User's natural language prompt describing what they want to watch.</param>
     /// <returns>Formatted prompt string.</returns>
-    private string BuildPrompt(List<MovieInfo> userMovies, PluginConfiguration config)
+    private string BuildPrompt(List<MovieInfo> userMovies, PluginConfiguration config, string userPrompt)
     {
-        // TODO: Implement intelligent movie selection for prompt
-        // Consider factors like: recent additions, high ratings, genre diversity
+        // Select a random subset of movies to avoid token limits and provide variety
+        // TODO: Implement intelligent selection based on user prompt keywords (e.g., "highest rated", "recent")
         var selectedMovies = userMovies
-            .OrderByDescending(m => m.CommunityRating ?? 0)
-            .Take(20) // Limit to avoid token limits
+            .OrderBy(x => Guid.NewGuid()) // Random selection
+            .Take(Math.Min(20, userMovies.Count)) // Limit to avoid token limits
             .ToList();
 
         var movieList = string.Join(", ", selectedMovies.Select(m => m.ToString()));
         
+        // Build dynamic prompt using template with user's specific request
         var prompt = config.PromptTemplate
             .Replace("{movies}", movieList)
+            .Replace("{prompt}", userPrompt)
             .Replace("{count}", config.MaxRecommendations.ToString());
 
         if (config.IncludeDescriptions)
@@ -99,7 +104,7 @@ public class OpenAiRecommendationService
 
         prompt += " Format the response as a numbered list with movie titles and years.";
 
-        _logger.LogDebug("Generated prompt with {SelectedMovieCount} movies", selectedMovies.Count);
+        _logger.LogDebug("Generated prompt with {SelectedMovieCount} movies for user request: {UserPrompt}", selectedMovies.Count, userPrompt);
         return prompt;
     }
 
