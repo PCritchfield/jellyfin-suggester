@@ -37,6 +37,8 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Used to customize how the AI generates recommendations.
     /// Supports placeholders: {movies}, {prompt}, {count}
     /// </summary>
+    public int MaxLibraryMovies { get; set; } = 100;
+
     public string PromptTemplate { get; set; } = 
         "You are a movie sommelier with expertise in film recommendations. " +
         "Based on this catalog from the user's library: {movies}. " +
