@@ -116,54 +116,94 @@ public class OpenAiRecommendationService
     /// <returns>The API response content.</returns>
     private async Task<string> CallOpenAiApiAsync(string prompt, PluginConfiguration config)
     {
-        // TODO: Implement proper error handling and retry logic
-        // TODO: Add request/response logging for debugging
-        // TODO: Implement token usage tracking and cost monitoring
+        // Basic retry policy (no external deps): 3 attempts, exponential backoff with jitter.
+        const int maxAttempts = 3;
+        var rnd = new Random();
 
-        var requestBody = new
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            model = config.OpenAiModel,
-            messages = new[]
+            try
             {
-                new
+                var requestBody = new
                 {
-                    role = "system",
-                    content = "You are a movie recommendation expert. Provide thoughtful, diverse recommendations based on the user's existing library."
-                },
-                new
+                    model = config.OpenAiModel,
+                    messages = new[]
+                    {
+                        new { role = "system", content = "You are a movie recommendation expert. Provide thoughtful, diverse recommendations based on the user's existing library." },
+                        new { role = "user", content = prompt }
+                    },
+                    max_tokens = 1000,
+                    temperature = 0.7
+                };
+
+                var json = JsonSerializer.Serialize(requestBody);
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                _httpClient.DefaultRequestHeaders.Clear();
+                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.OpenAiApiKey}");
+
+                _logger.LogDebug("OpenAI request attempt {Attempt}/{MaxAttempts} (model: {Model}, payloadBytes: {Bytes})",
+                    attempt, maxAttempts, config.OpenAiModel, Encoding.UTF8.GetByteCount(json));
+
+                using var response = await _httpClient.PostAsync(OpenAiApiUrl, content);
+
+                if (response.IsSuccessStatusCode)
                 {
-                    role = "user",
-                    content = prompt
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    var responseJson = JsonSerializer.Deserialize<JsonElement>(responseContent);
+                    return responseJson
+                        .GetProperty("choices")[0]
+                        .GetProperty("message")
+                        .GetProperty("content")
+                        .GetString() ?? string.Empty;
                 }
-            },
-            max_tokens = 1000,
-            temperature = 0.7
-        };
 
-        var json = JsonSerializer.Serialize(requestBody);
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
+                // Handle retry-able status codes (429, 5xx)
+                var status = (int)response.StatusCode;
+                var errorText = await response.Content.ReadAsStringAsync();
+                var snippet = errorText.Length > 300 ? errorText.Substring(0, 300) + "…" : errorText;
 
-        _httpClient.DefaultRequestHeaders.Clear();
-        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.OpenAiApiKey}");
+                bool retryable = status == 429 || (status >= 500 && status <= 599);
+                // Respect Retry-After header if present
+                TimeSpan retryAfter = TimeSpan.Zero;
+                if (response.Headers.TryGetValues("Retry-After", out var values))
+                {
+                    var val = values.FirstOrDefault();
+                    if (int.TryParse(val, out var seconds))
+                        retryAfter = TimeSpan.FromSeconds(seconds);
+                }
 
-        var response = await _httpClient.PostAsync(OpenAiApiUrl, content);
-        
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorContent = await response.Content.ReadAsStringAsync();
-            _logger.LogError("OpenAI API request failed: {StatusCode} - {Error}", 
-                response.StatusCode, errorContent);
-            throw new HttpRequestException($"OpenAI API request failed: {response.StatusCode}");
+                _logger.LogWarning("OpenAI API request failed (attempt {Attempt}/{MaxAttempts}) with {StatusCode}. Retryable={Retryable}. Error: {Error}",
+                    attempt, maxAttempts, response.StatusCode, retryable, snippet);
+
+                if (!retryable || attempt == maxAttempts)
+                {
+                    throw new HttpRequestException($"OpenAI API request failed: {response.StatusCode}");
+                }
+
+                // Backoff with jitter
+                var baseDelayMs = (int)Math.Pow(2, attempt) * 250; // 250ms, 500ms, 1000ms
+                var jitterMs = rnd.Next(0, 150);
+                var delay = retryAfter > TimeSpan.Zero ? retryAfter : TimeSpan.FromMilliseconds(baseDelayMs + jitterMs);
+                await Task.Delay(delay);
+            }
+            catch (HttpRequestException ex) when (attempt < maxAttempts)
+            {
+                _logger.LogWarning(ex, "OpenAI request network error (attempt {Attempt}/{MaxAttempts}). Retrying…", attempt, maxAttempts);
+                var baseDelayMs = (int)Math.Pow(2, attempt) * 250;
+                await Task.Delay(baseDelayMs);
+            }
+            catch (TaskCanceledException ex) when (attempt < maxAttempts)
+            {
+                // Timeout or cancellation
+                _logger.LogWarning(ex, "OpenAI request timed out (attempt {Attempt}/{MaxAttempts}). Retrying…", attempt, maxAttempts);
+                var baseDelayMs = (int)Math.Pow(2, attempt) * 250;
+                await Task.Delay(baseDelayMs);
+            }
         }
 
-        var responseContent = await response.Content.ReadAsStringAsync();
-        var responseJson = JsonSerializer.Deserialize<JsonElement>(responseContent);
-        
-        return responseJson
-            .GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString() ?? string.Empty;
+        // Should not reach here due to throw on final failure.
+        throw new InvalidOperationException("Unexpected retry loop exit while calling OpenAI API.");
     }
 
     /// <summary>
@@ -172,7 +212,7 @@ public class OpenAiRecommendationService
     /// <param name="response">Raw response from OpenAI.</param>
     /// <param name="includeDescriptions">Whether descriptions are included.</param>
     /// <returns>List of parsed movie recommendations.</returns>
-    private List<MovieRecommendation> ParseRecommendations(string response, bool includeDescriptions)
+    internal List<MovieRecommendation> ParseRecommendations(string response, bool includeDescriptions)
     {
         // TODO: Implement robust parsing logic
         // TODO: Handle various response formats from OpenAI
@@ -219,7 +259,7 @@ public class OpenAiRecommendationService
     /// </summary>
     /// <param name="line">The recommendation line.</param>
     /// <returns>Extracted movie title.</returns>
-    private string ExtractTitleFromLine(string line)
+    internal string ExtractTitleFromLine(string line)
     {
         // TODO: Implement robust title extraction
         // Handle formats like: "1. Movie Title (2023) - Description"
@@ -250,7 +290,7 @@ public class OpenAiRecommendationService
     /// </summary>
     /// <param name="line">The recommendation line.</param>
     /// <returns>Extracted year or null if not found.</returns>
-    private int? ExtractYearFromLine(string line)
+    internal int? ExtractYearFromLine(string line)
     {
         // TODO: Implement robust year extraction
         // Look for patterns like (2023) or (1999)
