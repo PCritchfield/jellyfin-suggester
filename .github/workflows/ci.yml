@@ -29,6 +29,12 @@ jobs:
       - name: Restore
         run: dotnet restore
 
+      - name: Install dotnet-format
+        run: dotnet tool update -g dotnet-format || true
+
+      - name: Verify formatting
+        run: ~/.dotnet/tools/dotnet-format --verify-no-changes
+
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
