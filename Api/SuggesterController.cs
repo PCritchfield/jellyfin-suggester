@@ -24,6 +24,7 @@ public class SuggesterController : ControllerBase
 {
     private readonly JellyfinLibraryService _libraryService;
     private readonly OpenAiRecommendationService _recommendationService;
+    private readonly MetadataExtractionService _metadataExtractionService;
     private readonly ILogger<SuggesterController> _logger;
 
     /// <summary>
@@ -31,20 +32,24 @@ public class SuggesterController : ControllerBase
     /// </summary>
     /// <param name="libraryManager">Jellyfin library manager.</param>
     /// <param name="logger">Logger instance.</param>
-    public SuggesterController(ILibraryManager libraryManager, ILogger<SuggesterController> logger)
+    public SuggesterController(
+        ILibraryManager libraryManager, 
+        ILogger<SuggesterController> logger)
     {
-        // TODO: Implement proper dependency injection for services
-        // For now, create loggers manually using LoggerFactory pattern
+        // Create appropriate logger instances for each service
         var loggerFactory = Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
         
         _libraryService = new JellyfinLibraryService(libraryManager, 
             loggerFactory.CreateLogger<JellyfinLibraryService>());
         
-        // TODO: Inject HttpClient through DI container
-        // For now, create a basic HttpClient - this should be improved
+        // Create HttpClient directly - Jellyfin plugins don't have IHttpClientFactory by default
         var httpClient = new System.Net.Http.HttpClient();
         _recommendationService = new OpenAiRecommendationService(httpClient, 
             loggerFactory.CreateLogger<OpenAiRecommendationService>());
+        
+        // Instantiate metadata extraction service
+        _metadataExtractionService = new MetadataExtractionService(httpClient, 
+            loggerFactory.CreateLogger<MetadataExtractionService>());
         
         _logger = logger;
     }
@@ -105,37 +110,33 @@ public class SuggesterController : ControllerBase
                 return BadRequest(new RecommendationResponse
                 {
                     Success = false,
-                    ErrorMessage = "OpenAI API key is not configured. Please configure the plugin settings."
+                    ErrorMessage = "OpenAI API key is not configured. Please set it in the plugin settings."
                 });
             }
 
-            // Get user's movie library
-            var userMovies = await _libraryService.GetUserMoviesAsync(
-                request.UserId, 
-                request.MaxLibraryMovies ?? 100);
+            // Extract metadata filters from user prompt
+            var metadataFilters = await _metadataExtractionService.ExtractMetadataAsync(request.Prompt, config);
 
-            if (!userMovies.Any())
-            {
-                return NotFound(new RecommendationResponse
-                {
-                    Success = false,
-                    ErrorMessage = "No movies found in user's library"
-                });
-            }
+            // Retrieve user's movies (respect MaxLibraryMovies if provided)
+            int maxMovies = request.MaxLibraryMovies ?? config.MaxLibraryMovies;
+            var userMovies = await _libraryService.GetUserMoviesAsync(userId, maxMovies);
 
-            // Generate recommendations using OpenAI with user's prompt
-            var recommendations = await _recommendationService.GenerateRecommendationsAsync(
-                userMovies, config, request.Prompt);
+            // Apply filters to the movie list
+            var filteredMovies = ApplyFilters(userMovies, metadataFilters);
 
-            _logger.LogInformation("Successfully generated {Count} recommendations for user {UserId}", 
-                recommendations.Count, userId);
+            // Generate recommendations using filtered movies and original prompt
+            var recommendations = await _recommendationService.GenerateRecommendationsAsync(filteredMovies, config, request.Prompt);
 
             return Ok(new RecommendationResponse
             {
                 Success = true,
                 Recommendations = recommendations,
                 GeneratedAt = DateTime.UtcNow,
-                BasedOnMovieCount = userMovies.Count
+                BasedOnMovieCount = filteredMovies.Count,
+                Metadata = new Dictionary<string, object>
+                {
+                    { "MetadataFilters", metadataFilters }
+                }
             });
         }
         catch (Exception ex)
@@ -146,9 +147,20 @@ public class SuggesterController : ControllerBase
             return StatusCode(500, new RecommendationResponse
             {
                 Success = false,
-                ErrorMessage = $"Failed to generate recommendations: {ex.Message}"
+                ErrorMessage = "An unexpected error occurred while generating recommendations."
             });
         }
+    }
+
+    internal static List<MovieInfo> ApplyFilters(List<MovieInfo> movies, MetadataFilters metadataFilters)
+    {
+        // Simple filtering based on genres and year range
+        var filtered = movies.Where(m =>
+            (metadataFilters.Genres == null || !metadataFilters.Genres.Any() || m.Genres.Any(g => metadataFilters.Genres.Contains(g, StringComparer.OrdinalIgnoreCase))) &&
+            (metadataFilters.YearFrom == null || (m.Year.HasValue && m.Year >= metadataFilters.YearFrom)) &&
+            (metadataFilters.YearTo == null || (m.Year.HasValue && m.Year <= metadataFilters.YearTo))
+        ).ToList();
+        return filtered;
     }
 
     /// <summary>
